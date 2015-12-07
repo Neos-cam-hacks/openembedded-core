@@ -1,6 +1,8 @@
 inherit linux-kernel-base kernel-module-split
 
-PROVIDES += "virtual/kernel"
+KERNEL_PACKAGE_NAME ??= "kernel"
+
+PROVIDES += "${@ "virtual/kernel" if (d.getVar("KERNEL_PACKAGE_NAME", True) == "kernel") else "" }"
 DEPENDS += "virtual/${TARGET_PREFIX}binutils virtual/${TARGET_PREFIX}gcc kmod-native depmodwrapper-cross bc-native lzop-native"
 
 S = "${STAGING_KERNEL_DIR}"
@@ -30,10 +32,23 @@ KERNEL_VERSION_PKG_NAME[vardepvalue] = "${LINUX_VERSION}"
 python __anonymous () {
     import re
 
+    # The default kernel recipe builds in a shared location defined by
+    # bitbake/distro confs: STAGING_KERNEL_DIR and STAGING_KERNEL_BUILDDIR.
+    # Set these variables to directories under ${WORKDIR} in alternate
+    # kernel recipes (I.e. where KERNEL_PACKAGE_NAME != kernel) so that they
+    # may build in parallel with the default kernel without clobbering.
+    if d.getVar("KERNEL_PACKAGE_NAME", True) != "kernel":
+        workdir = d.getVar("WORKDIR", True)
+        sourceDir = os.path.join(workdir, 'kernel-source')
+        artifactsDir = os.path.join(workdir, 'kernel-build-artifacts')
+        d.setVar("STAGING_KERNEL_DIR", sourceDir)
+        d.setVar("STAGING_KERNEL_BUILDDIR", artifactsDir)
+
     # Merge KERNEL_IMAGETYPE and KERNEL_ALT_IMAGETYPE into KERNEL_IMAGETYPES
     type = d.getVar('KERNEL_IMAGETYPE', True) or ""
     alttype = d.getVar('KERNEL_ALT_IMAGETYPE', True) or ""
     types = d.getVar('KERNEL_IMAGETYPES', True) or ""
+    kname = d.getVar('KERNEL_PACKAGE_NAME', True) or "kernel"
     if type not in types.split():
         types = (type + ' ' + types).strip()
     if alttype not in types.split():
@@ -46,23 +61,23 @@ python __anonymous () {
     for type in typeformake.split():
         typelower = type.lower()
 
-        d.appendVar('PACKAGES', ' ' + 'kernel-image-' + typelower)
+        d.appendVar('PACKAGES', ' %s-image-%s' % (kname, typelower))
 
-        d.setVar('FILES_kernel-image-' + typelower, '/boot/' + type + '*')
+        d.setVar('FILES_%s-image-%s' % (kname, typelower), '/boot/' + type + '*')
 
-        d.appendVar('RDEPENDS_kernel-image', ' ' + 'kernel-image-' + typelower)
+        d.appendVar('RDEPENDS_%s-image' % kname, ' %s-image-%s' % (kname, typelower))
 
-        d.setVar('PKG_kernel-image-' + typelower, 'kernel-image-' + typelower + '-${KERNEL_VERSION_PKG_NAME}')
+        d.setVar('PKG_%s-image-%s' % (kname,typelower), '%s-image-%s-${KERNEL_VERSION_PKG_NAME}' % (kname, typelower))
 
-        d.setVar('ALLOW_EMPTY_kernel-image-' + typelower, '1')
+        d.setVar('ALLOW_EMPTY_%s-image-%s' % (kname, typelower), '1')
 
         imagedest = d.getVar('KERNEL_IMAGEDEST', True)
         priority = d.getVar('KERNEL_PRIORITY', True)
         postinst = '#!/bin/sh\n' + 'update-alternatives --install /' + imagedest + '/' + type + ' ' + type + ' ' + '/' + imagedest + '/' + type + '-${KERNEL_VERSION_NAME} ' + priority + ' || true' + '\n'
-        d.setVar('pkg_postinst_kernel-image-' + typelower, postinst)
+        d.setVar('pkg_postinst_%s-image-%s' % (kname, typelower), postinst)
 
         postrm = '#!/bin/sh\n' + 'update-alternatives --remove' + ' ' + type + ' ' + type + '-${KERNEL_VERSION_NAME} || true' + '\n'
-        d.setVar('pkg_postrm_kernel-image-' + typelower, postrm)
+        d.setVar('pkg_postrm_%s-image-%s' % (kname, typelower), postrm)
 
     image = d.getVar('INITRAMFS_IMAGE', True)
     if image:
@@ -120,9 +135,9 @@ base_do_unpack_append () {
 
 inherit kernel-arch deploy
 
-PACKAGES_DYNAMIC += "^kernel-module-.*"
-PACKAGES_DYNAMIC += "^kernel-image-.*"
-PACKAGES_DYNAMIC += "^kernel-firmware-.*"
+PACKAGES_DYNAMIC += "^${KERNEL_PACKAGE_NAME}-module-.*"
+PACKAGES_DYNAMIC += "^${KERNEL_PACKAGE_NAME}-image-.*"
+PACKAGES_DYNAMIC += "^${KERNEL_PACKAGE_NAME}-firmware-.*"
 
 export OS = "${TARGET_OS}"
 export CROSS_COMPILE = "${TARGET_PREFIX}"
@@ -366,9 +381,9 @@ do_shared_workdir_setscene () {
 
 emit_depmod_pkgdata() {
 	# Stash data for depmod
-	install -d ${PKGDESTWORK}/kernel-depmod/
-	echo "${KERNEL_VERSION}" > ${PKGDESTWORK}/kernel-depmod/kernel-abiversion
-	cp ${B}/System.map ${PKGDESTWORK}/kernel-depmod/System.map-${KERNEL_VERSION}
+	install -d ${PKGDESTWORK}/${KERNEL_PACKAGE_NAME}-depmod/
+	echo "${KERNEL_VERSION}" > ${PKGDESTWORK}/${KERNEL_PACKAGE_NAME}-depmod/${KERNEL_PACKAGE_NAME}-abiversion
+	cp ${B}/System.map ${PKGDESTWORK}/${KERNEL_PACKAGE_NAME}-depmod/System.map-${KERNEL_VERSION}
 }
 
 PACKAGEFUNCS += "emit_depmod_pkgdata"
@@ -383,7 +398,7 @@ do_shared_workdir () {
 	# Store the kernel version in sysroots for module-base.bbclass
 	#
 
-	echo "${KERNEL_VERSION}" > $kerneldir/kernel-abiversion
+	echo "${KERNEL_VERSION}" > $kerneldir/${KERNEL_PACKAGE_NAME}-abiversion
 
 	# Copy files required for module builds
 	cp System.map $kerneldir/System.map-${KERNEL_VERSION}
@@ -481,28 +496,28 @@ EXPORT_FUNCTIONS do_compile do_install do_configure
 
 # kernel-base becomes kernel-${KERNEL_VERSION}
 # kernel-image becomes kernel-image-${KERNEL_VERSION}
-PACKAGES = "kernel kernel-base kernel-vmlinux kernel-image kernel-dev kernel-modules"
+PACKAGES = "${KERNEL_PACKAGE_NAME} ${KERNEL_PACKAGE_NAME}-base ${KERNEL_PACKAGE_NAME}-vmlinux ${KERNEL_PACKAGE_NAME}-image ${KERNEL_PACKAGE_NAME}-dev ${KERNEL_PACKAGE_NAME}-modules"
 FILES_${PN} = ""
-FILES_kernel-base = "/lib/modules/${KERNEL_VERSION}/modules.order /lib/modules/${KERNEL_VERSION}/modules.builtin"
-FILES_kernel-image = ""
-FILES_kernel-dev = "/boot/System.map* /boot/Module.symvers* /boot/config* ${KERNEL_SRC_PATH} /lib/modules/${KERNEL_VERSION}/build"
-FILES_kernel-vmlinux = "/boot/vmlinux*"
-FILES_kernel-modules = ""
-RDEPENDS_kernel = "kernel-base"
-# Allow machines to override this dependency if kernel image files are
+FILES_${KERNEL_PACKAGE_NAME}-base = "/lib/modules/${KERNEL_VERSION}/modules.order /lib/modules/${KERNEL_VERSION}/modules.builtin"
+FILES_${KERNEL_PACKAGE_NAME}-image = ""
+FILES_${KERNEL_PACKAGE_NAME}-dev = "/boot/System.map* /boot/Module.symvers* /boot/config* ${KERNEL_SRC_PATH} /lib/modules/${KERNEL_VERSION}/build"
+FILES_${KERNEL_PACKAGE_NAME}-vmlinux = "/boot/vmlinux*"
+FILES_${KERNEL_PACKAGE_NAME}-modules = ""
+RDEPENDS_${KERNEL_PACKAGE_NAME} = "${KERNEL_PACKAGE_NAME}-base"
+# Allow machines to override this dependency if kernel image files are 
 # not wanted in images as standard
-RDEPENDS_kernel-base ?= "kernel-image"
-PKG_kernel-image = "kernel-image-${@legitimize_package_name('${KERNEL_VERSION}')}"
-RDEPENDS_kernel-image += "${@base_conditional('KERNEL_IMAGETYPE', 'vmlinux', 'kernel-vmlinux', '', d)}"
-PKG_kernel-base = "kernel-${@legitimize_package_name('${KERNEL_VERSION}')}"
-RPROVIDES_kernel-base += "kernel-${KERNEL_VERSION}"
-ALLOW_EMPTY_kernel = "1"
-ALLOW_EMPTY_kernel-base = "1"
-ALLOW_EMPTY_kernel-image = "1"
-ALLOW_EMPTY_kernel-modules = "1"
-DESCRIPTION_kernel-modules = "Kernel modules meta package"
+RDEPENDS_${KERNEL_PACKAGE_NAME}-base ?= "${KERNEL_PACKAGE_NAME}-image"
+PKG_${KERNEL_PACKAGE_NAME}-image = "${KERNEL_PACKAGE_NAME}-image-${@legitimize_package_name('${KERNEL_VERSION}')}"
+RDEPENDS_${KERNEL_PACKAGE_NAME}-image += "${@base_conditional('KERNEL_IMAGETYPE', 'vmlinux', '${KERNEL_PACKAGE_NAME}-vmlinux', '', d)}"
+PKG_${KERNEL_PACKAGE_NAME}-base = "${KERNEL_PACKAGE_NAME}-${@legitimize_package_name('${KERNEL_VERSION}')}"
+RPROVIDES_${KERNEL_PACKAGE_NAME}-base += "${KERNEL_PACKAGE_NAME}-${KERNEL_VERSION}"
+ALLOW_EMPTY_${KERNEL_PACKAGE_NAME} = "1"
+ALLOW_EMPTY_${KERNEL_PACKAGE_NAME}-base = "1"
+ALLOW_EMPTY_${KERNEL_PACKAGE_NAME}-image = "1"
+ALLOW_EMPTY_${KERNEL_PACKAGE_NAME}-modules = "1"
+DESCRIPTION_${KERNEL_PACKAGE_NAME}-modules = "Kernel modules meta package"
 
-pkg_postinst_kernel-base () {
+pkg_postinst_${KERNEL_PACKAGE_NAME}-base () {
 	if [ ! -e "$D/lib/modules/${KERNEL_VERSION}" ]; then
 		mkdir -p $D/lib/modules/${KERNEL_VERSION}
 	fi
@@ -516,7 +531,7 @@ pkg_postinst_kernel-base () {
 PACKAGESPLITFUNCS_prepend = "split_kernel_packages "
 
 python split_kernel_packages () {
-    do_split_packages(d, root='/lib/firmware', file_regex='^(.*)\.(bin|fw|cis|csp|dsp)$', output_pattern='kernel-firmware-%s', description='Firmware for %s', recursive=True, extra_depends='')
+    do_split_packages(d, root='/lib/firmware', file_regex='^(.*)\.(bin|fw|cis|csp|dsp)$', output_pattern='${KERNEL_PACKAGE_NAME}-firmware-%s', description='Firmware for %s', recursive=True, extra_depends='')
 }
 
 # Many scripts want to look in arch/$arch/boot for the bootable

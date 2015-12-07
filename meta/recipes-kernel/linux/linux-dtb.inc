@@ -2,7 +2,7 @@
 FILES_kernel-devicetree = "/${KERNEL_IMAGEDEST}/devicetree*"
 
 python __anonymous () {
-    d.appendVar("PACKAGES", " kernel-devicetree")
+    d.appendVar("PACKAGES", " ${KERNEL_PACKAGE_NAME}-devicetree")
 }
 
 normalize_dtb () {
