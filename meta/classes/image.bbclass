@@ -192,7 +192,30 @@ python () {
 IMAGE_CLASSES += "image_types"
 inherit ${IMAGE_CLASSES}
 
-IMAGE_POSTPROCESS_COMMAND ?= ""
+python check_image_file_ownership () {
+    import sys, os, oe.image
+
+    imgTypes = d.getVar("IMAGE_FSTYPES", True).split()
+    tarImgTypes = [ x for x in imgTypes if "tar" in x ]
+
+    # bail if there isn't a tar image in this build
+    # TODO: Maybe add other image types
+    if len(tarImgTypes) == 0:
+        bb.debug(1, "Skipping check, no 'tar' image specified")
+        return
+
+    imgDeployDir = d.getVar("IMGDEPLOYDIR", True)
+    imgName = d.getVar("IMAGE_NAME", True)
+    imgNameSuffix = d.getVar("IMAGE_NAME_SUFFIX", True)
+
+    for tarFileExt in tarImgTypes:
+        archiveFilename = (imgName + imgNameSuffix + "." + tarFileExt)
+        archiveFilePath = os.path.join(imgDeployDir, archiveFilename)
+
+        oe.image.check_file_ownership_tar(d, archiveFilePath)
+}
+
+IMAGE_POSTPROCESS_COMMAND ?= " check_image_file_ownership "
 
 # some default locales
 IMAGE_LINGUAS ?= "de-de fr-fr en-gb"
